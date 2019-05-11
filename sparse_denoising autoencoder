@@ -1,0 +1,164 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import tensorflow.contrib.layers as layers
+import tensorflow.contrib.framework as ops
+import os
+import cv2
+import time
+from functools import partial
+import sys
+start_time = time.time()
+
+train_path = 'F:/source code/autoencoder/input/imgs/train/'
+test_path = 'F:/source code/autoencoder/input/imgs/test/'
+image_size=64
+def load_train(train_path):
+    data = []
+    for image_file in sorted(os.listdir(train_path)):
+        full_dir = os.path.join(train_path, image_file)
+        #print(full_dir)
+        image = cv2.imread(full_dir)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        image = cv2.resize(image, (image_size, image_size), cv2.INTER_LINEAR)
+        image = np.array(image)
+        image_flatten = image.flatten()
+        image_flatten = image_flatten/255
+        data.append(image_flatten)
+    return data
+
+class DatasetSequence(object):
+    def __init__(self, data):
+        self.data = data
+        self.batch_id = 0
+        self._epochs_completed = 0
+        self._index_in_epoch = 0
+        self._num_examples = len(self.data)
+
+    def next(self, batch_size):
+        start = self._index_in_epoch
+        self._index_in_epoch += batch_size
+        if self._index_in_epoch > self._num_examples:
+            # Finish epoch
+            self._index_in_epoch += 1
+            # shuffle the data
+            perm = np.arange(self._num_examples)
+            np.random.shuffle(perm)
+            self.data = [self.data[e] for e in perm]
+            start = 0
+            self._index_in_epoch = batch_size
+            assert batch_size <= self._num_examples
+        end = self._index_in_epoch
+        return self.data[start:end]
+
+data_train = load_train(train_path)
+data_test = load_train(test_path)
+trainset = DatasetSequence(data_train)
+print(trainset._num_examples)
+testset = DatasetSequence(data_test)
+
+
+p = 0.1
+q = np.linspace(0.001, 0.999, 500)
+kl_div = p * np.log(p / q) + (1 - p) * np.log((1 - p) / (1 - q))
+mse = (p - q)**2
+plt.plot([p, p], [0, 0.3], "k:")
+plt.text(0.05, 0.32, "Target\nsparsity", fontsize=14)
+plt.plot(q, kl_div, "b-", label="KL divergence")
+plt.plot(q, mse, "r--", label="MSE")
+plt.legend(loc="upper left")
+plt.xlabel("Actual sparsity")
+plt.ylabel("Cost", rotation=0)
+plt.axis([0, 1, 0, 0.95])
+plt.savefig("sparsity_loss_plot.png")
+#plt.show()
+
+def kl_divergence( p, p_hat):
+    return p * tf.log(p) - p * tf.log(p_hat) + (1 - p) * tf.log(1 - p) - (1 - p) * tf.log(1 - p_hat)
+
+def gaussian_additive_noise(x, std):
+    return x + tf.random_normal(shape=tf.shape(x), dtype=tf.float32, mean=0.0, stddev=std)
+
+sparse_reg = 0.001
+learning_rate = 0.01
+sparsity_target = 0.1
+sparsity_weight = 0.2
+l2_reg = 0.0001
+
+n_inputs = 64 * 64
+n_hidden1 = 2048
+n_hidden2 = 1024  # codings
+n_outputs = n_inputs
+
+
+x = tf.placeholder(tf.float32, shape=[None, n_inputs], name="Input")
+noise_images = gaussian_additive_noise(x,10/255)
+
+
+encoder1 =tf.layers.dense(noise_images,n_hidden1,activation=none)
+#encoder2 = my_dense_layer(encoder1, n_hidden2)
+
+#decoder= my_dense_layer(encoder2,n_hidden1)
+decoder1 = tf.layers.dense(encoder1, n_outputs)
+
+hidden1_mean = tf.reduce_mean(encoder1, axis=0) # batch mean
+sparsity_loss = tf.reduce_sum(kl_divergence(sparsity_target, hidden1_mean))
+reconstruction_loss = tf.reduce_mean(tf.square(x - decoder1)) # MSE
+loss = reconstruction_loss + sparsity_weight * sparsity_loss
+#loss = reconstruction_loss
+print('AUTOENCODER')
+print('hidden1_mean: ',hidden1_mean )
+
+print('sparsity_loss: ',sparsity_loss)
+print('reconstruction_loss: ',reconstruction_loss)
+print('loss: ',loss)
+
+lr = 0.001
+batch_size = 100
+n_epochs = 1000
+n_batchs = trainset._num_examples // batch_size
+print('n_batchs = ',n_batchs)
+
+optimizer = tf.train.AdamOptimizer(lr).minimize(loss)
+
+sess = tf.Session()
+sess.run(tf.global_variables_initializer())
+init = tf.global_variables_initializer()
+with tf.Session() as sess:
+    init.run()
+    for i_epoch in range(1,n_epochs+1):
+        n_batchs = trainset._num_examples // batch_size
+        for iteration in range(n_batchs):
+            #print("\r{}%".format(100 * iteration // n_batches), end="")
+            x_batch = trainset.next(batch_size)
+            #print('X_batch', type(X_batch))
+            sess.run(optimizer, feed_dict={x: x_batch})
+            #print(sess.run(X_mean, feed_dict={x: x_batch}))
+            reconstruction_loss_val, sparsity_loss_val, loss_val = sess.run([reconstruction_loss, sparsity_loss, loss], feed_dict={x: x_batch})
+            print("\r{}".format(i_epoch), "Train MSE:", reconstruction_loss_val, "\tSparsity loss:", sparsity_loss_val, "\tTotal loss:", loss_val)
+        #saver.save(sess, "./my_model_sparse.ckpt")
+
+    any_images = testset.data[:3]
+    print_noise_image, reconstructed = sess.run([noise_images, decoder1], feed_dict={x: any_images})
+
+    f1 =plt.figure(1)
+    for i in range(3):
+        plt.subplot(1,3,i+1)
+        plt.imshow(any_images[i].reshape(64, 64), cmap='gray')
+        plt.axis('off')
+        plt.savefig('fige1')
+
+    f2=plt.figure(2)
+    for i in range(3):
+        plt.subplot(1,3,i+1)
+        plt.imshow(print_noise_image[i].reshape(64, 64), cmap='gray')
+        plt.axis('off')
+        plt.savefig('fige2')
+
+    f3=plt.figure(3)
+    for i in range(3):
+        plt.subplot(1,3,i+1)
+        plt.imshow(reconstructed[i].reshape(64, 64), cmap='gray')
+        plt.axis('off')
+        plt.savefig('fige3_1000')
+    plt.show()
